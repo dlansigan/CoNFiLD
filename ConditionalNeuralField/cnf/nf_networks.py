@@ -1,7 +1,10 @@
 import torch
 from torch import nn
 import numpy as np
+import sys
 
+sys.path.append("/home/dana/Documents/CoNFiLD/CoNFiLD")
+sys.path.append("/home/dana/Documents/CoNFiLD/CoNFiLD/ConditionalNeuralField")
 from ConditionalNeuralField.cnf.components import BatchLinear, FeatureMapping, NLS_AND_INITS, FourierLayer, GaborLayer
 from ConditionalNeuralField.cnf.initialization import *
 

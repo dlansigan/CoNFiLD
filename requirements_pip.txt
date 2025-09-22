@@ -74,4 +74,4 @@ Werkzeug==3.0.1
 wrapt==1.16.0
 xformers==0.0.24
 zipp==3.17.0
-git+https://github.com/jx-wang-s-group/BasicUtility
+#git+https://github.com/jx-wang-s-group/BasicUtility

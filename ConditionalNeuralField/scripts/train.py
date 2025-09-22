@@ -1,6 +1,8 @@
 from os.path import exists
 from os import mkdir
 import sys
+sys.path.append("/home/dana/Documents/CoNFiLD/CoNFiLD")
+sys.path.append("/home/dana/Documents/CoNFiLD/CoNFiLD/ConditionalNeuralField")
 from basicutility import ReadInput as ri
 
 
@@ -14,8 +16,10 @@ from torch.utils.tensorboard import SummaryWriter
 from torch.nn.parallel import DistributedDataParallel as DDP
 from einops import rearrange
 
-from cnf.utils.normalize import Normalizer_ts
+# from cnf.utils.normalize import Normalizer_ts, Normalizer_masked
+from cnf.utils import normalize
 from cnf.utils import readdata
+from cnf.utils import loss_funcs
 from cnf import nf_networks
 from functools import partial
 
@@ -68,6 +72,16 @@ def rMAE(prediction, target, dims=(1, 2)):
         dim=dims
     )
 
+def rMAE_masked(prediction, target, sdf, dims=(1,2)):
+    mask = sdf > 0 # Get mask from SDF
+    mask = mask.expand_as(target).float() # Reshape for multiplying to squared error
+    abs_err = torch.abs(prediction-target)
+    masked_err = abs_err * mask # Apply mask
+    masked_target = torch.abs(target) * mask # Apply mask
+    sum_abs_err = masked_err.sum(dim=dims) # Compute MAE only inside geometry
+    sum_target = masked_target.sum(dim=dims) # Get target mean only inside geometry
+    rMAE = torch.where(sum_target>0, sum_abs_err/sum_target, torch.zeros_like(sum_target))
+    return rMAE
 
 class trainer(object):
 
@@ -152,6 +166,24 @@ class trainer(object):
                 coord = np.stack(np.meshgrid(*coord, indexing="ij"), axis=-1)
                 
             self.train_coord = torch.tensor(coord, dtype=torch.float32)
+                
+            ###### read data - sdf ######
+            if hasattr(hyper_para, "geom_info"):
+                self.sdf = np.load(f"{hyper_para.geom_info['sdf_path']}") # (num_geoms Npts 1)
+                self.num_geoms = hyper_para.geom_info['num_geoms']
+                assert (
+                    self.sdf.shape[0] == self.num_geoms
+                ), "SDF shape is not consistent with number of geometries"
+                self.sdf = torch.tensor(self.sdf, dtype=torch.float32)
+                # Generate array of geometry ids (Nsamp Npts 1)
+                self.geom_ids = np.arange(self.num_geoms)
+                self.geom_ids = np.repeat(self.geom_ids,fois.shape[0]//self.num_geoms)
+            else:
+                Warning(
+                    "No SDF data is provided, assuming no mask needed."
+                )
+                self.sdf = None
+                
             ###### convert to tensor ######
             fois = (
                 torch.tensor(fois, dtype=torch.float32)
@@ -167,10 +199,21 @@ class trainer(object):
             )
 
         ###### normalizer ######
-        self.in_normalizer = Normalizer_ts(**hyper_para.normalizer)
-        self.out_normalizer = Normalizer_ts(**hyper_para.normalizer)
+        normalizer_params = hyper_para.normalizer
+        if not infer_mode:
+            Normalizer = getattr(normalize, 'Normalizer_' + hyper_para.normalizer_type)
+            if hyper_para.normalizer_type=='masked': # Add sdf if using Normalizer_masked
+                normalizer_params['sdf']=self.sdf
+                normalizer_params['N_samp']=self.N_samples
+                normalizer_params['N_chan']=fois.shape[-1]
+        else:
+            Normalizer = normalize.Normalizer_ts # Only use Normalizer_ts if in infer mode
+        if hyper_para.normalize_in != 'None':
+            self.in_normalizer = Normalizer(**normalizer_params)
+        self.out_normalizer = Normalizer(**normalizer_params)
+        # NOTE: extra_siren_in stuff might be broken
         if hasattr(hyper_para, "extra_siren_in"):
-            self.extra_in_normalizer = Normalizer_ts(**hyper_para.normalizer)
+            self.extra_in_normalizer = Normalizer(**hyper_para.normalizer)
             extra_siren_in_flag = True
         else:
             extra_siren_in_flag = False
@@ -183,16 +226,18 @@ class trainer(object):
                 f"loading normalizer parameters from {hyper_para.save_path}/normalizer_params.pt"
             )
             norm_params = torch.load(f"{hyper_para.save_path}/normalizer_params.pt")
-            self.in_normalizer.params = norm_params["x_normalizer_params"]
+            if hyper_para.normalize_in != 'None':
+                self.in_normalizer.params = norm_params["x_normalizer_params"]
             self.out_normalizer.params = norm_params["y_normalizer_params"]
             if extra_siren_in_flag:
                 self.extra_in_normalizer.params = norm_params["extra_normalizer_params"]
 
         elif not infer_mode:
             print("No noramlization file found! Calculating normalizer parameters")
-            self.in_normalizer.fit_normalize(
-                coord if hyper_para.lumped_latent else coord.flatten(0, hyper_para.dims-1) 
-            )
+            if hyper_para.normalize_in != 'None':
+                self.in_normalizer.fit_normalize(
+                    coord if hyper_para.lumped_latent else coord.flatten(0, hyper_para.dims-1) 
+                )
             if extra_siren_in_flag:
                 self.out_normalizer.fit_normalize(fois.flatten(0, hyper_para.dims+1))
             else:
@@ -204,9 +249,14 @@ class trainer(object):
             print(
                 f"Saving normalizer parameters to {hyper_para.save_path}/normalizer_params.pt"
             )
+            if hyper_para.normalize_in != 'None':
+                x_normalizer_params = self.in_normalizer.get_params()
+            else:
+                x_normalizer_params = None
+            y_normalizer_params = self.out_normalizer.get_params()
             toSave = {
-                "x_normalizer_params": self.in_normalizer.get_params(),
-                "y_normalizer_params": self.out_normalizer.get_params(),
+                "x_normalizer_params": x_normalizer_params,#self.in_normalizer.get_params(),
+                "y_normalizer_params": y_normalizer_params,#self.out_normalizer.get_params(),
             }
             if extra_siren_in_flag:
                 toSave["extra_normalizer_params"] = self.extra_in_normalizer.get_params()
@@ -217,7 +267,10 @@ class trainer(object):
             )
 
         if not infer_mode:
-            normed_coords = self.in_normalizer.normalize(coord)
+            if hyper_para.normalize_in != 'None':
+                normed_coords = self.in_normalizer.normalize(coord)
+            else:
+                normed_coords = coord
             normed_fois = self.out_normalizer.normalize(fois)
             if extra_siren_in_flag:
                 normed_extra_siren_in = self.extra_in_normalizer.normalize(extra_siren_in)
@@ -228,7 +281,8 @@ class trainer(object):
         ###### nf ######
         if "kwargs" not in hyper_para.NF:
             self.nf: torch.nn.Module = getattr(nf_networks, hyper_para.NF["name"])(
-                in_coord_features=hyper_para.dims if not extra_siren_in_flag else hyper_para.dims+1,
+                # in_coord_features=hyper_para.dims if not extra_siren_in_flag else hyper_para.dims+1,
+                in_coord_features=hyper_para.NF["in_coord_features"] if not extra_siren_in_flag else hyper_para.dims+1,
                 in_latent_features=hyper_para.hidden_size,
                 out_features=hyper_para.NF["out_features"],
                 num_hidden_layers=hyper_para.NF["num_hidden_layers"],
@@ -242,7 +296,7 @@ class trainer(object):
         ###### latents ######
         if not infer_mode:
             self.latents = LatentContainer(
-                self.N_samples, hyper_para.hidden_size, hyper_para.dims, hyper_para.lumped_latent
+                self.N_samples, hyper_para.hidden_size, hyper_para.NF['in_coord_features'], hyper_para.lumped_latent
             )
 
         self.hyper_para = hyper_para
@@ -266,11 +320,13 @@ class trainer(object):
         self,
         coord: torch.Tensor,
         latents: torch.Tensor,
+        **kwargs
     ) -> torch.Tensor:
         if coord is None:
             print("Using default training query points")
         coord = coord if coord is not None else self.train_coord
-        coord = self.in_normalizer.normalize(coord)
+        if hasattr(self, 'in_normalizer'):
+            coord = self.in_normalizer.normalize(coord)
         if len(coord.shape) > 2:
             latents = latents[:, None, None]
         else:
@@ -280,7 +336,15 @@ class trainer(object):
 
     def train(self, fix_nf = False):
         self.epoches = self.hyper_para.epochs
-        self.criterion = getattr(torch.nn, self.hyper_para.loss_fn)()
+
+        # Get loss function, either torch loss function or user defined function
+        if hasattr(torch.nn, self.hyper_para.loss_fn):
+            self.criterion = getattr(torch.nn, self.hyper_para.loss_fn)()
+        elif hasattr(loss_funcs, self.hyper_para.loss_fn):
+            self.criterion = getattr(loss_funcs, self.hyper_para.loss_fn)
+        else:
+            raise ValueError(f'Unknown loss function {self.hyper_para.loss_fn}')
+
         self.lr = self.hyper_para.lr
         self.save_dict = {
             "save_path": self.hyper_para.save_path,
@@ -301,6 +365,8 @@ class trainer(object):
                     self.dataset,
                     self.hyper_para,
                     self.save,
+                    self.sdf,
+                    self.geom_ids,
                     self.world_size,
                     optim_dict,
                     start_epoch,
@@ -323,6 +389,8 @@ class trainer(object):
                 self.dataset,
                 self.hyper_para,
                 self.save,
+                self.sdf,
+                self.geom_ids,
                 self.world_size,
                 optim_dict,
                 start_epoch,
@@ -340,6 +408,8 @@ class trainer(object):
         dataset,
         hyper_para,
         savefn,
+        sdf=None,
+        geom_ids=None,
         world_size=1,
         optim_dict={},
         start_epoch=0,
@@ -402,15 +472,25 @@ class trainer(object):
             train_ins_error = []
 
             for batch_coords, batch_fois, idx in train_loader:
-
                 batch_latent = latents(idx)
                 batch_fois = batch_fois.to(rank)
                 if isinstance(batch_coords, list): 
                     batch_coords = [i.to(rank) for i in batch_coords]
                 else:
                     batch_coords = batch_coords.to(rank)
-                batch_output = model(batch_coords, batch_latent)                
-                loss = criterion(batch_output, batch_fois)
+                # Concatenate SDF to batch_coords if needed
+                if sdf is not None and geom_ids is not None :
+                    geom_id = geom_ids[idx]
+                    batch_coords = torch.cat((batch_coords,sdf[geom_id,:,:].to(batch_coords.device)),dim=2)
+                    batch_output = model(batch_coords, batch_latent)    
+                    # torch.save(batch_output,'output_debug.pt')            
+                    # torch.save(sdf[geom_id,:,:].to(batch_coords.device),'sdf_debug.pt')
+                    # print(geom_id)
+                    # stop          
+                    loss = criterion(batch_output, batch_fois, sdf[geom_id,:,:].to(batch_coords.device))
+                else:
+                    batch_output = model(batch_coords, batch_latent)                
+                    loss = criterion(batch_output, batch_fois)
                 optim_states.zero_grad()
                 loss.backward()
                 optim_states.step()
@@ -439,11 +519,18 @@ class trainer(object):
                             test_coords = [i.to(rank) for i in test_coords]
                         else:
                             test_coords = test_coords.to(rank)
+                            # Concatenate SDF to test_coords if needed
+                            if sdf is not None and geom_ids is not None:
+                                geom_id = geom_ids[idx]
+                                test_coords = torch.cat((test_coords,sdf[geom_id,:,:].to(batch_coords.device)),dim=2)
                         prediction = out_normalizer.denormalize(
                             model(test_coords, latents(idx))
                         )
                         target = out_normalizer.denormalize(test_fois.to(rank))
-                        error = test_criteria(prediction, target)
+                        if sdf is not None  and geom_ids is not None :
+                            error = test_criteria(prediction, target, sdf[geom_id,:,:].to(batch_coords.device))
+                        else:
+                            error = test_criteria(prediction, target)
                         test_error.append(error.detach())
 
                 test_error = torch.cat(test_error).mean(dim=0)
@@ -512,7 +599,7 @@ class trainer(object):
             else:
                 self.N_samples = checkpoint["hidden_states"]["latents"].shape[0]
             self.latents = LatentContainer(
-                self.N_samples, self.hyper_para.hidden_size, self.hyper_para.dims, self.hyper_para.lumped_latent
+                self.N_samples, self.hyper_para.hidden_size, self.hyper_para.NF['in_coord_features'], self.hyper_para.lumped_latent
             )
             self.latents.load_state_dict(checkpoint["hidden_states"])
 

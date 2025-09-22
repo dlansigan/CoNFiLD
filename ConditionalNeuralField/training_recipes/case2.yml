@@ -1,15 +1,14 @@
-data_path: /home/xinyang/test/CoNFiLD/output.npy
+data_path: /home/dana/Documents/CoNFiLD/CoNFiLD/ConditionalNeuralField/data/Case2/output.npy
 load_data_fn: load_channel_flow
 
-save_path: UnconditionalDiffusionTraining_and_Generation/data/case2_test
-# coor_path: /PATH/TO/YOUR/COOR/FOLDER
+save_path: /home/dana/Documents/CoNFiLD/CoNFiLD/ConditionalNeuralField/training/case2
 lumped_latent: False
 
 normalizer:
   method: '-11'
   dim: 0
-batch_size: 40
-test_batch_size: 40
+batch_size: 20
+test_batch_size: 20
 
 multiGPU: 1
 readin_data_shape: "t h w c"

@@ -1,8 +1,8 @@
-data_path: /home/pandu/Panresearch/ConditionalNeuralField/data/3DIBMCUBE/Case4_3DCube/output.npy
+data_path: /home/dana/Documents/CoNFiLD/CoNFiLD/ConditionalNeuralField/data/Case4/data.npy
 load_data_fn: load_3d_flow
 
-save_path: UnconditionalDiffusionTraining_and_Generation/data/case4_test
-coor_path: /home/pandu/Panresearch/ConditionalNeuralField/data/3DIBMCUBE/Case4_3DCube/coords.npy
+save_path: /home/dana/Documents/CoNFiLD/CoNFiLD/ConditionalNeuralField/training/case4
+coor_path: /home/dana/Documents/CoNFiLD/CoNFiLD/ConditionalNeuralField/data/Case4/coords.npy
 lumped_latent: True
 
 normalizer:
@@ -11,7 +11,7 @@ normalizer:
 batch_size: 4
 test_batch_size: 4
 
-multiGPU: 2
+multiGPU: 1
 readin_data_shape: "t N c"
 batch_shape: "t N c"
 

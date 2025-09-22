@@ -1,8 +1,8 @@
-data_path: /home/xinyang/store/projects/nfdiff/algo/elbow/uvp.npy
+data_path: /home/dana/Documents/CoNFiLD/CoNFiLD/ConditionalNeuralField/data/Case1/data.npy
 load_data_fn: load_elbow_flow
 
-save_path: /home/xinyang/store/projects/nfdiff/algo/elbow/t0
-coor_path: /home/xinyang/store/projects/nfdiff/algo/elbow/coor.npy
+save_path: /home/dana/Documents/CoNFiLD/CoNFiLD/ConditionalNeuralField/training/case1
+coor_path: /home/dana/Documents/CoNFiLD/CoNFiLD/ConditionalNeuralField/data/Case1/coords.npy
 lumped_latent: True
 
 normalizer:

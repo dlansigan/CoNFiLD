@@ -11,9 +11,11 @@ from mpi4py import MPI
 import torch as th
 import torch.distributed as dist
 
+from dotenv import load_dotenv # Hack to get .env to work
+
 # Change this to reflect your cluster layout.
 # The GPU for a given rank is (rank % GPUS_PER_NODE).
-GPUS_PER_NODE = 2
+GPUS_PER_NODE = 1
 
 SETUP_RETRY_COUNT = 3
 
@@ -22,6 +24,9 @@ def setup_dist():
     """
     Setup a distributed process group.
     """
+
+    load_dotenv() # Hack to get .env to work
+
     if dist.is_initialized():
         return
     os.environ["CUDA_VISIBLE_DEVICES"] = os.environ["CUDA_VISIBLE_DEVICES"].split(',')[MPI.COMM_WORLD.Get_rank()]

@@ -47,7 +47,16 @@ def decoder(coords, latents, model, x_normalizer, y_normalizer, batch_size, devi
                 eid = int(t_size)
             batch_latent = latents[sid:eid].reshape(-1,1,latent_size)
             batch_coords = coords.reshape(1,m_size,coords_size).to(device)  #<1, meshsize, cin>
-            batch_output = y_normalizer.denormalize(model(x_normalizer.normalize(batch_coords),batch_latent))
+            if batch_coords.size()[-1]<=3:
+                input = x_normalizer.normalize(batch_coords)
+            else: # Handle if SDF is used
+                if x_normalizer is None:
+                    coords_normed = batch_coords[:,:,:3]
+                else:
+                    coords_normed = x_normalizer.normalize(batch_coords[:,:,:3])
+                input = torch.cat([coords_normed,batch_coords[:,:,[3]]],axis=2)
+            batch_output = y_normalizer.denormalize(
+                model(input,batch_latent))
             #<batch, meshsize, cout>
             output_all.append(batch_output.cpu())
         output_all = torch.cat(output_all, dim = 0)

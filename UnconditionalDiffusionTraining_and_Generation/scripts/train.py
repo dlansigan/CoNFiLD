@@ -2,6 +2,9 @@
 import sys
 import torch
 import numpy as np
+sys.path.append("/home/dana/Documents/CoNFiLD/CoNFiLD")
+sys.path.append("/home/dana/Documents/CoNFiLD/CoNFiLD/ConditionalNeuralField")
+sys.path.append("/home/dana/Documents/CoNFiLD/CoNFiLD/UnconditionalDiffusionTraining_and_Generation")
 from src.script_util import create_model, create_gaussian_diffusion
 from src.train_util import TrainLoop
 from torch.utils.data import DataLoader, TensorDataset
